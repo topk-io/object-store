@@ -395,12 +395,20 @@ impl Request<'_> {
         Self { builder, ..self }
     }
 
-    pub(crate) fn with_payload(mut self, payload: PutPayload) -> Self {
+    pub(crate) async fn with_payload(mut self, payload: PutPayload) -> Self {
+        const MB: usize = usize::pow(2, 20);
+
         if (!self.config.skip_signature && self.config.sign_payload)
             || self.config.checksum.is_some()
         {
             let mut sha256 = Context::new(&digest::SHA256);
-            payload.iter().for_each(|x| sha256.update(x));
+            // payload.iter().for_each(|x| sha256.update(x));
+            for part in payload.iter() {
+                for chunk in part.chunks(MB) {
+                    sha256.update(chunk);
+                    tokio::task::consume_budget().await;
+                }
+            }
             let payload_sha256 = sha256.finish();
 
             if let Some(Checksum::SHA256) = self.config.checksum {
@@ -684,7 +692,7 @@ impl S3Client {
             .idempotent(true);
 
         request = match data {
-            PutPartPayload::Part(payload) => request.with_payload(payload),
+            PutPartPayload::Part(payload) => request.with_payload(payload).await,
             PutPartPayload::Copy(path) => request.header(
                 "x-amz-copy-source",
                 &format!("{}/{}", self.config.bucket, encode_path(path)),
