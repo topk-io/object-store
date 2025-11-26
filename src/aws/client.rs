@@ -403,10 +403,10 @@ impl Request<'_> {
         {
             let mut sha256 = Context::new(&digest::SHA256);
             for part in payload.iter() {
-                for chunk in part.chunks(4 * MB) {
+                for chunk in part.chunks(MB) {
                     // Write the chunk into SHA256 context
                     sha256.update(chunk);
-                    // Yield if needed to avoid
+                    // Yield if needed to avoid blocking the runtime driver
                     tokio::task::consume_budget().await;
                 }
             }
