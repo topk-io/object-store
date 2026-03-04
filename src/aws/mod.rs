@@ -183,7 +183,13 @@ impl ObjectStore for AmazonS3 {
             (PutMode::Overwrite, _) => request.idempotent(true).do_put().await,
             (PutMode::Create, S3ConditionalPut::Disabled) => Err(Error::NotImplemented),
             (PutMode::Create, S3ConditionalPut::ETagMatch) => {
-                match request.header(&IF_NONE_MATCH, "*").idempotent(true).do_put().await {
+                match request
+                    .header(&IF_NONE_MATCH, "*")
+                    // Conditional put with If-None-Match is idempotent.
+                    .idempotent(true)
+                    .do_put()
+                    .await
+                {
                     // Technically If-None-Match should return NotModified but some stores,
                     // such as R2, instead return PreconditionFailed
                     // https://developers.cloudflare.com/r2/api/s3/extensions/#conditional-operations-in-putobject
@@ -205,9 +211,7 @@ impl ObjectStore for AmazonS3 {
                     S3ConditionalPut::ETagMatch => {
                         match request
                             .header(&IF_MATCH, etag.as_str())
-                            // Conditional PUTs with If-Match are idempotent:
-                            // if the first attempt succeeds and changes the
-                            // ETag, retries will fail with PreconditionFailed.
+                            // Conditional PUTs with If-Match are idempotent.
                             .idempotent(true)
                             // Real S3 will occasionally report 409 Conflict
                             // if there are concurrent `If-Match` requests
