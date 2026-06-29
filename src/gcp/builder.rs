@@ -98,6 +98,8 @@ pub struct GoogleCloudStorageBuilder {
     bucket_name: Option<String>,
     /// Url
     url: Option<String>,
+    /// Override for the GCS service base URL (e.g. a regional endpoint)
+    base_url: Option<String>,
     /// Path to the service account file
     service_account_path: Option<String>,
     /// The serialized service account key
@@ -215,6 +217,7 @@ impl Default for GoogleCloudStorageBuilder {
             retry_config: Default::default(),
             client_options: ClientOptions::new().with_allow_http(true),
             url: None,
+            base_url: None,
             credentials: None,
             skip_signature: Default::default(),
             signing_credentials: None,
@@ -285,6 +288,12 @@ impl GoogleCloudStorageBuilder {
     /// ```
     pub fn with_url(mut self, url: impl Into<String>) -> Self {
         self.url = Some(url.into());
+        self
+    }
+
+    /// Override the GCS service base URL.
+    pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.base_url = Some(endpoint.into());
         self
     }
 
@@ -489,9 +498,15 @@ impl GoogleCloudStorageBuilder {
             .map(|c| c.disable_oauth)
             .unwrap_or(false);
 
-        let gcs_base_url: String = service_account_credentials
-            .as_ref()
-            .and_then(|c| c.gcs_base_url.clone())
+        let gcs_base_url: String = self
+            .base_url
+            .take()
+            .map(|url| url.trim_end_matches('/').to_string())
+            .or_else(|| {
+                service_account_credentials
+                    .as_ref()
+                    .and_then(|c| c.gcs_base_url.clone())
+            })
             .unwrap_or_else(|| DEFAULT_GCS_BASE_URL.to_string());
 
         let credentials = if let Some(credentials) = self.credentials {
