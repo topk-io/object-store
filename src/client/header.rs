@@ -82,14 +82,17 @@ pub(crate) fn get_put_result(
 }
 
 /// Extracts a optional version from the provided [`HeaderMap`]
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub(crate) fn get_version(headers: &HeaderMap, version: &str) -> Result<Option<String>, Error> {
     Ok(match headers.get(version) {
-        Some(x) => Some(
-            x.to_str()
-                .map_err(|source| Error::BadHeader { source })?
-                .to_string(),
-        ),
+        Some(x) => {
+            let version = x.to_str().map_err(|source| Error::BadHeader { source })?;
+            // S3 reports objects written while bucket versioning is disabled or
+            // suspended as the "null version": GETs return the literal "null",
+            // while PUT responses omit the header entirely. Treat it as "no
+            // version" so PUT- and GET-derived metadata agree. GCS generations
+            // and Azure version ids are never the literal "null".
+            (version != "null").then(|| version.to_string())
+        }
         None => None,
     })
 }
@@ -147,12 +150,8 @@ pub(crate) fn header_meta(
             source,
         })?;
 
-    let version = match cfg.version_header.and_then(|h| headers.get(h)) {
-        Some(v) => Some(
-            v.to_str()
-                .map_err(|source| Error::BadHeader { source })?
-                .to_string(),
-        ),
+    let version = match cfg.version_header {
+        Some(header) => get_version(headers, header)?,
         None => None,
     };
 
@@ -163,4 +162,60 @@ pub(crate) fn header_meta(
         size,
         e_tag,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VERSION_HEADER: &str = "x-amz-version-id";
+
+    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.parse().unwrap(), v.parse().unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn test_get_version_normalizes_null() {
+        let version = get_version(&headers(&[(VERSION_HEADER, "null")]), VERSION_HEADER).unwrap();
+        assert_eq!(version, None);
+
+        let version = get_version(
+            &headers(&[(VERSION_HEADER, "3sL4kqtJlcpXro")]),
+            VERSION_HEADER,
+        )
+        .unwrap();
+        assert_eq!(version, Some("3sL4kqtJlcpXro".to_string()));
+
+        let version = get_version(&headers(&[]), VERSION_HEADER).unwrap();
+        assert_eq!(version, None);
+    }
+
+    #[test]
+    fn test_header_meta_normalizes_null_version() {
+        let cfg = HeaderConfig {
+            etag_required: false,
+            last_modified_required: false,
+            version_header: Some(VERSION_HEADER),
+            user_defined_metadata_prefix: None,
+        };
+
+        let meta = header_meta(
+            &Path::from("foo"),
+            &headers(&[("content-length", "0"), (VERSION_HEADER, "null")]),
+            cfg,
+        )
+        .unwrap();
+        assert_eq!(meta.version, None);
+
+        let meta = header_meta(
+            &Path::from("foo"),
+            &headers(&[("content-length", "0"), (VERSION_HEADER, "3sL4kqtJlcpXro")]),
+            cfg,
+        )
+        .unwrap();
+        assert_eq!(meta.version, Some("3sL4kqtJlcpXro".to_string()));
+    }
 }
