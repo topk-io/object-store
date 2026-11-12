@@ -600,6 +600,8 @@ impl AzureClient {
         opts: PutMultipartOpts,
     ) -> Result<PutResult> {
         let PutMultipartOpts {
+            // handled in `MicrosoftAzure::put_multipart_opts`
+            mode: _,
             tags,
             attributes,
             extensions,

@@ -145,6 +145,7 @@ impl Default for PutPartPayload<'_> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum CompleteMultipartMode {
     Overwrite,
     Create,
@@ -643,6 +644,8 @@ impl S3Client {
         opts: PutMultipartOpts,
     ) -> Result<MultipartId> {
         let PutMultipartOpts {
+            // handled in `AmazonS3::put_multipart_opts`
+            mode: _,
             tags,
             attributes,
             extensions,
