@@ -1237,6 +1237,11 @@ impl From<Attributes> for PutOptions {
 /// Options for [`ObjectStore::put_multipart_opts`]
 #[derive(Debug, Clone, Default)]
 pub struct PutMultipartOpts {
+    /// Configure the [`PutMode`] applied when the upload completes
+    ///
+    /// Implementations that don't support a mode return [`Error::NotImplemented`],
+    /// except Azure and GCS, which panic on any mode other than [`PutMode::Overwrite`]
+    pub mode: PutMode,
     /// Provide a [`TagSet`] for this object
     ///
     /// Implementations that don't support object tagging should ignore this
@@ -1257,16 +1262,18 @@ pub struct PutMultipartOpts {
 impl PartialEq<Self> for PutMultipartOpts {
     fn eq(&self, other: &Self) -> bool {
         let Self {
+            mode,
             tags,
             attributes,
             extensions: _,
         } = self;
         let Self {
+            mode: other_mode,
             tags: other_tags,
             attributes: other_attributes,
             extensions: _,
         } = other;
-        (tags == other_tags) && (attributes == other_attributes)
+        (mode == other_mode) && (tags == other_tags) && (attributes == other_attributes)
     }
 }
 

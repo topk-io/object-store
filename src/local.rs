@@ -390,13 +390,17 @@ impl ObjectStore for LocalFileSystem {
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<Box<dyn MultipartUpload>> {
+        if matches!(opts.mode, PutMode::Update(_)) {
+            return Err(crate::Error::NotImplemented);
+        }
+
         if !opts.attributes.is_empty() {
             return Err(crate::Error::NotImplemented);
         }
 
         let dest = self.path_to_filesystem(location)?;
         let (file, src) = new_staged_upload(&dest)?;
-        Ok(Box::new(LocalUpload::new(src, dest, file)))
+        Ok(Box::new(LocalUpload::new(src, dest, file, opts.mode)))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -765,14 +769,16 @@ struct LocalUpload {
 struct UploadState {
     dest: PathBuf,
     file: Mutex<File>,
+    mode: PutMode,
 }
 
 impl LocalUpload {
-    pub(crate) fn new(src: PathBuf, dest: PathBuf, file: File) -> Self {
+    pub(crate) fn new(src: PathBuf, dest: PathBuf, file: File, mode: PutMode) -> Self {
         Self {
             state: Arc::new(UploadState {
                 dest,
                 file: Mutex::new(file),
+                mode,
             }),
             src: Some(src),
             offset: 0,
@@ -809,8 +815,22 @@ impl MultipartUpload for LocalUpload {
         maybe_spawn_blocking(move || {
             // Ensure no inflight writes
             let file = s.file.lock();
-            std::fs::rename(&src, &s.dest)
-                .map_err(|source| Error::UnableToRenameFile { source })?;
+            match s.mode {
+                PutMode::Overwrite => std::fs::rename(&src, &s.dest)
+                    .map_err(|source| Error::UnableToRenameFile { source })?,
+                PutMode::Create => {
+                    let linked = std::fs::hard_link(&src, &s.dest);
+                    let _ = std::fs::remove_file(&src); // Attempt to cleanup
+                    linked.map_err(|source| match source.kind() {
+                        ErrorKind::AlreadyExists => Error::AlreadyExists {
+                            path: s.dest.to_string_lossy().to_string(),
+                            source,
+                        },
+                        _ => Error::UnableToRenameFile { source },
+                    })?
+                }
+                PutMode::Update(_) => unreachable!(),
+            }
             let metadata = file.metadata().map_err(|e| Error::Metadata {
                 source: e.into(),
                 path: src.to_string_lossy().to_string(),
@@ -1108,6 +1128,7 @@ mod tests {
         copy_rename_nonexistent_object(&integration).await;
         stream_get(&integration).await;
         put_opts(&integration, false).await;
+        put_multipart_opts_create(&integration, true).await;
     }
 
     #[test]

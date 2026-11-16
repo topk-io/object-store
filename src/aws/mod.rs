@@ -234,6 +234,13 @@ impl ObjectStore for AmazonS3 {
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<Box<dyn MultipartUpload>> {
+        let mode = match (&opts.mode, &self.client.config.conditional_put) {
+            (PutMode::Overwrite, _) => CompleteMultipartMode::Overwrite,
+            (PutMode::Create, S3ConditionalPut::ETagMatch) => CompleteMultipartMode::Create,
+            (PutMode::Create, S3ConditionalPut::Disabled) | (PutMode::Update(_), _) => {
+                return Err(Error::NotImplemented)
+            }
+        };
         let upload_id = self.client.create_multipart(location, opts).await?;
 
         Ok(Box::new(S3MultiPartUpload {
@@ -243,6 +250,7 @@ impl ObjectStore for AmazonS3 {
                 location: location.clone(),
                 upload_id: upload_id.clone(),
                 parts: Default::default(),
+                mode,
             }),
         }))
     }
@@ -389,6 +397,7 @@ struct UploadState {
     location: Path,
     upload_id: String,
     client: Arc<S3Client>,
+    mode: CompleteMultipartMode,
 }
 
 #[async_trait]
@@ -415,15 +424,27 @@ impl MultipartUpload for S3MultiPartUpload {
     async fn complete(&mut self) -> Result<PutResult> {
         let parts = self.state.parts.finish(self.part_idx)?;
 
-        self.state
+        let result = self
+            .state
             .client
             .complete_multipart(
                 &self.state.location,
                 &self.state.upload_id,
                 parts,
-                CompleteMultipartMode::Overwrite,
+                self.state.mode,
             )
-            .await
+            .await;
+        match (self.state.mode, result) {
+            // Same mapping as `PutMode::Create` in `put_opts`
+            (
+                CompleteMultipartMode::Create,
+                Err(e @ Error::NotModified { .. } | e @ Error::Precondition { .. }),
+            ) => Err(Error::AlreadyExists {
+                path: self.state.location.to_string(),
+                source: Box::new(e),
+            }),
+            (_, r) => r,
+        }
     }
 
     async fn abort(&mut self) -> Result<()> {
@@ -613,6 +634,7 @@ mod tests {
         if test_conditional_put {
             put_opts(&integration, true).await;
         }
+        put_multipart_opts_create(&integration, test_conditional_put).await;
 
         // run integration test with unsigned payload enabled
         let builder = AmazonS3Builder::from_env().with_unsigned_payload(true);

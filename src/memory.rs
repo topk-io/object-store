@@ -226,7 +226,11 @@ impl ObjectStore for InMemory {
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<Box<dyn MultipartUpload>> {
+        if matches!(opts.mode, PutMode::Update(_)) {
+            return Err(crate::Error::NotImplemented);
+        }
         Ok(Box::new(InMemoryUpload {
+            mode: opts.mode,
             location: location.clone(),
             attributes: opts.attributes,
             parts: vec![],
@@ -499,6 +503,7 @@ impl InMemory {
 
 #[derive(Debug)]
 struct InMemoryUpload {
+    mode: PutMode,
     location: Path,
     attributes: Attributes,
     parts: Vec<PutPayload>,
@@ -517,11 +522,20 @@ impl MultipartUpload for InMemoryUpload {
         let mut buf = Vec::with_capacity(cap);
         let parts = self.parts.iter().flatten();
         parts.for_each(|x| buf.extend_from_slice(x));
-        let etag = self.storage.write().insert(
-            &self.location,
+        let mut storage = self.storage.write();
+        let etag = storage.next_etag;
+        let entry = Entry::new(
             buf.into(),
+            Utc::now(),
+            etag,
             std::mem::take(&mut self.attributes),
         );
+        match &self.mode {
+            PutMode::Overwrite => storage.overwrite(&self.location, entry),
+            PutMode::Create => storage.create(&self.location, entry)?,
+            PutMode::Update(_) => return Err(crate::Error::NotImplemented),
+        }
+        storage.next_etag += 1;
 
         Ok(PutResult {
             e_tag: Some(etag.to_string()),
@@ -553,6 +567,7 @@ mod tests {
         stream_get(&integration).await;
         put_opts(&integration, true).await;
         multipart(&integration, &integration).await;
+        put_multipart_opts_create(&integration, true).await;
         put_get_attributes(&integration).await;
     }
 
