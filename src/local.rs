@@ -390,11 +390,7 @@ impl ObjectStore for LocalFileSystem {
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<Box<dyn MultipartUpload>> {
-        if matches!(opts.mode, PutMode::Update(_)) {
-            return Err(crate::Error::NotImplemented);
-        }
-
-        if !opts.attributes.is_empty() {
+        if matches!(opts.mode, PutMode::Update(_)) || !opts.attributes.is_empty() {
             return Err(crate::Error::NotImplemented);
         }
 

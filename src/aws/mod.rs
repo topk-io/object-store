@@ -435,10 +435,9 @@ impl MultipartUpload for S3MultiPartUpload {
             )
             .await;
         match (self.state.mode, result) {
-            // Same mapping as `PutMode::Create` in `put_opts`
             (
                 CompleteMultipartMode::Create,
-                Err(e @ Error::NotModified { .. } | e @ Error::Precondition { .. }),
+                Err(e @ (Error::NotModified { .. } | Error::Precondition { .. })),
             ) => Err(Error::AlreadyExists {
                 path: self.state.location.to_string(),
                 source: Box::new(e),
