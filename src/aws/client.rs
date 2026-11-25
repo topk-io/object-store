@@ -795,7 +795,7 @@ impl S3Client {
 
         let response = request
             .retryable(&self.config.retry_config)
-            .idempotent(true)
+            .idempotent(matches!(mode, CompleteMultipartMode::Overwrite))
             .retry_error_body(true)
             .send()
             .await
