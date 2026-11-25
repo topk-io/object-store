@@ -166,7 +166,7 @@ impl ObjectStore for GoogleCloudStorage {
         if opts.mode != PutMode::Overwrite {
             // XML API multipart uploads reject preconditions, create-only needs a compose with
             // `ifGenerationMatch=0` - https://docs.cloud.google.com/storage/docs/request-preconditions
-            unimplemented!("conditional multipart upload on GCS");
+            return Err(crate::Error::NotImplemented);
         }
         let upload_id = self.client.multipart_initiate(location, opts).await?;
 
@@ -302,6 +302,7 @@ mod test {
         maybe_skip_integration!();
         let integration = GoogleCloudStorageBuilder::from_env().build().unwrap();
 
+        put_multipart_opts_create(&integration, false).await;
         put_get_delete_list(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;

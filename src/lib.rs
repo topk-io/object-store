@@ -1240,7 +1240,7 @@ pub struct PutMultipartOpts {
     /// Configure the [`PutMode`] applied when the upload completes
     ///
     /// Implementations that don't support a mode return [`Error::NotImplemented`],
-    /// except Azure and GCS, which panic on any mode other than [`PutMode::Overwrite`]
+    /// except Azure, which panics on any mode other than [`PutMode::Overwrite`]
     pub mode: PutMode,
     /// Provide a [`TagSet`] for this object
     ///
