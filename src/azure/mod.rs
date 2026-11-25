@@ -102,9 +102,7 @@ impl ObjectStore for MicrosoftAzure {
         opts: PutMultipartOpts,
     ) -> Result<Box<dyn MultipartUpload>> {
         if opts.mode != PutMode::Overwrite {
-            // TODO: Put Block List supports `If-None-Match` but is untested here; a racing loser
-            // can fail with `Error::Generic` instead (see `multipart_race_condition`)
-            unimplemented!("conditional multipart upload on Azure");
+            return Err(crate::Error::NotImplemented);
         }
         Ok(Box::new(AzureMultiPartUpload {
             part_idx: 0,

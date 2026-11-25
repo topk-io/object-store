@@ -1239,8 +1239,7 @@ impl From<Attributes> for PutOptions {
 pub struct PutMultipartOpts {
     /// Configure the [`PutMode`] applied when the upload completes
     ///
-    /// Implementations that don't support a mode return [`Error::NotImplemented`],
-    /// except Azure, which panics on any mode other than [`PutMode::Overwrite`]
+    /// Implementations that don't support a mode return [`Error::NotImplemented`]
     pub mode: PutMode,
     /// Provide a [`TagSet`] for this object
     ///
