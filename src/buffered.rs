@@ -341,6 +341,7 @@ impl BufWriter {
                             attributes: self.attributes.take().unwrap_or_default(),
                             tags: self.tags.take().unwrap_or_default(),
                             extensions: self.extensions.take().unwrap_or_default(),
+                            ..Default::default()
                         };
                         let upload = self.store.put_multipart_opts(&path, opts).await?;
                         let mut chunked =
@@ -401,6 +402,7 @@ impl AsyncWrite for BufWriter {
                             attributes: self.attributes.take().unwrap_or_default(),
                             tags: self.tags.take().unwrap_or_default(),
                             extensions: self.extensions.take().unwrap_or_default(),
+                            ..Default::default()
                         };
                         let store = Arc::clone(&self.store);
                         self.state = BufWriterState::Prepare(Box::pin(async move {

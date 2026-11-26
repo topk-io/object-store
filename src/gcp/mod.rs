@@ -42,7 +42,7 @@ use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
 use crate::{
     multipart::PartId, path::Path, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
     UploadPart,
 };
 use async_trait::async_trait;
@@ -163,6 +163,11 @@ impl ObjectStore for GoogleCloudStorage {
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<Box<dyn MultipartUpload>> {
+        if opts.mode != PutMode::Overwrite {
+            // XML API multipart uploads reject preconditions, create-only needs a compose with
+            // `ifGenerationMatch=0` - https://docs.cloud.google.com/storage/docs/request-preconditions
+            return Err(crate::Error::NotImplemented);
+        }
         let upload_id = self.client.multipart_initiate(location, opts).await?;
 
         Ok(Box::new(GCSMultipartUpload {
@@ -297,6 +302,7 @@ mod test {
         maybe_skip_integration!();
         let integration = GoogleCloudStorageBuilder::from_env().build().unwrap();
 
+        put_multipart_opts_create(&integration, false).await;
         put_get_delete_list(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;

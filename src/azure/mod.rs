@@ -27,7 +27,7 @@ use crate::{
     path::Path,
     signer::Signer,
     GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt, TryStreamExt};
@@ -101,6 +101,11 @@ impl ObjectStore for MicrosoftAzure {
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<Box<dyn MultipartUpload>> {
+        if opts.mode != PutMode::Overwrite {
+            // TODO: Put Block List supports `If-None-Match` but is untested here; a racing loser
+            // can fail with `Error::Generic` instead (see `multipart_race_condition`)
+            return Err(crate::Error::NotImplemented);
+        }
         Ok(Box::new(AzureMultiPartUpload {
             part_idx: 0,
             opts,

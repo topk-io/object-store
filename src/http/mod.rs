@@ -288,5 +288,6 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
+        put_multipart_opts_create(&integration, false).await;
     }
 }

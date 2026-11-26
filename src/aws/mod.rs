@@ -234,6 +234,13 @@ impl ObjectStore for AmazonS3 {
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<Box<dyn MultipartUpload>> {
+        let mode = match (&opts.mode, &self.client.config.conditional_put) {
+            (PutMode::Overwrite, _) => CompleteMultipartMode::Overwrite,
+            (PutMode::Create, S3ConditionalPut::ETagMatch) => CompleteMultipartMode::Create,
+            (PutMode::Create, S3ConditionalPut::Disabled) | (PutMode::Update(_), _) => {
+                return Err(Error::NotImplemented)
+            }
+        };
         let upload_id = self.client.create_multipart(location, opts).await?;
 
         Ok(Box::new(S3MultiPartUpload {
@@ -243,6 +250,7 @@ impl ObjectStore for AmazonS3 {
                 location: location.clone(),
                 upload_id: upload_id.clone(),
                 parts: Default::default(),
+                mode,
             }),
         }))
     }
@@ -389,6 +397,7 @@ struct UploadState {
     location: Path,
     upload_id: String,
     client: Arc<S3Client>,
+    mode: CompleteMultipartMode,
 }
 
 #[async_trait]
@@ -415,15 +424,26 @@ impl MultipartUpload for S3MultiPartUpload {
     async fn complete(&mut self) -> Result<PutResult> {
         let parts = self.state.parts.finish(self.part_idx)?;
 
-        self.state
+        let result = self
+            .state
             .client
             .complete_multipart(
                 &self.state.location,
                 &self.state.upload_id,
                 parts,
-                CompleteMultipartMode::Overwrite,
+                self.state.mode,
             )
-            .await
+            .await;
+        match (self.state.mode, result) {
+            (
+                CompleteMultipartMode::Create,
+                Err(e @ (Error::NotModified { .. } | Error::Precondition { .. })),
+            ) => Err(Error::AlreadyExists {
+                path: self.state.location.to_string(),
+                source: Box::new(e),
+            }),
+            (_, r) => r,
+        }
     }
 
     async fn abort(&mut self) -> Result<()> {
@@ -495,16 +515,91 @@ impl PaginatedListStore for AmazonS3 {
 mod tests {
     use super::*;
     use crate::client::get::GetClient;
-    use crate::client::retry::RetryContext;
-    use crate::client::SpawnedReqwestConnector;
+    use crate::client::mock_server::MockServer;
+    use crate::client::retry::{RequestError as RetryRequestError, RetryContext, RetryError};
+    use crate::client::{HttpErrorKind, SpawnedReqwestConnector};
     use crate::integration::*;
     use crate::tests::*;
-    use crate::ClientOptions;
+    use crate::{ClientOptions, RetryConfig};
     use base64::prelude::BASE64_STANDARD;
     use base64::Engine;
     use http::HeaderMap;
+    use hyper::Response;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
+
+    #[tokio::test]
+    async fn test_multipart_completion_timeout() {
+        for (mode, expected_attempts) in [
+            (CompleteMultipartMode::Overwrite, 2),
+            (CompleteMultipartMode::Create, 1),
+        ] {
+            let mock = MockServer::new().await;
+            let attempts = Arc::new(AtomicUsize::new(0));
+            for delay in [Duration::from_secs(10), Duration::ZERO] {
+                let attempts = Arc::clone(&attempts);
+                mock.push_async_fn(move |_| async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(delay).await;
+                    Response::new(
+                        "<CompleteMultipartUploadResult><ETag>etag</ETag></CompleteMultipartUploadResult>"
+                            .to_string(),
+                    )
+                });
+            }
+            let store = AmazonS3Builder::new()
+                .with_bucket_name("test")
+                .with_region("us-east-1")
+                .with_access_key_id("test")
+                .with_secret_access_key("test")
+                .with_endpoint(mock.url())
+                .with_client_options(
+                    ClientOptions::new()
+                        .with_allow_http(true)
+                        .with_timeout(Duration::from_millis(100)),
+                )
+                .with_retry(RetryConfig {
+                    max_retries: 1,
+                    ..Default::default()
+                })
+                .build()
+                .unwrap();
+            let result = store
+                .client
+                .complete_multipart(
+                    &Path::from("test"),
+                    "upload",
+                    vec![PartId {
+                        content_id: "part".to_string(),
+                    }],
+                    mode,
+                )
+                .await;
+            mock.shutdown().await;
+            assert_eq!(
+                attempts.load(Ordering::SeqCst),
+                expected_attempts,
+                "{mode:?}"
+            );
+            match mode {
+                CompleteMultipartMode::Overwrite => {
+                    assert_eq!(result.unwrap().e_tag.as_deref(), Some("etag"));
+                }
+                CompleteMultipartMode::Create => {
+                    let error = match result.unwrap_err() {
+                        Error::Generic { source, .. } => source.downcast::<RetryError>().unwrap(),
+                        error => panic!("Unexpected error: {error}"),
+                    };
+                    assert!(matches!(
+                        error.inner(),
+                        RetryRequestError::Http(error) if error.kind() == HttpErrorKind::Timeout
+                    ));
+                }
+            }
+        }
+    }
 
     #[tokio::test]
     async fn write_multipart_file_with_signature() {
@@ -613,6 +708,7 @@ mod tests {
         if test_conditional_put {
             put_opts(&integration, true).await;
         }
+        put_multipart_opts_create(&integration, test_conditional_put).await;
 
         // run integration test with unsigned payload enabled
         let builder = AmazonS3Builder::from_env().with_unsigned_payload(true);

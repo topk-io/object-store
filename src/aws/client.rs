@@ -145,6 +145,7 @@ impl Default for PutPartPayload<'_> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum CompleteMultipartMode {
     Overwrite,
     Create,
@@ -643,6 +644,7 @@ impl S3Client {
         opts: PutMultipartOpts,
     ) -> Result<MultipartId> {
         let PutMultipartOpts {
+            mode: _,
             tags,
             attributes,
             extensions,
@@ -793,7 +795,7 @@ impl S3Client {
 
         let response = request
             .retryable(&self.config.retry_config)
-            .idempotent(true)
+            .idempotent(matches!(mode, CompleteMultipartMode::Overwrite))
             .retry_error_body(true)
             .send()
             .await

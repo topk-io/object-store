@@ -29,7 +29,7 @@ use crate::multipart::MultipartStore;
 use crate::path::Path;
 use crate::{
     Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, MultipartUpload,
-    ObjectStore, PutMode, PutPayload, UpdateVersion, WriteMultipart,
+    ObjectStore, PutMode, PutMultipartOpts, PutPayload, UpdateVersion, WriteMultipart,
 };
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
@@ -1200,6 +1200,40 @@ pub async fn multipart_race_condition(storage: &dyn ObjectStore, last_writer_win
     }
 
     assert!(result_bytes.starts_with(&expected_writer_contents));
+}
+
+/// Tests [`ObjectStore::put_multipart_opts`] with [`PutMode::Create`]
+pub async fn put_multipart_opts_create(storage: &dyn ObjectStore, supported: bool) {
+    let rng = rng();
+    let suffix = String::from_utf8(rng.sample_iter(Alphanumeric).take(32).collect()).unwrap();
+    let path = Path::from(format!("put_multipart_opts_create_{suffix}"));
+    let opts = PutMultipartOpts {
+        mode: PutMode::Create,
+        ..Default::default()
+    };
+
+    if !supported {
+        let err = storage.put_multipart_opts(&path, opts).await.unwrap_err();
+        assert!(matches!(err, Error::NotImplemented), "{err}");
+        return;
+    }
+
+    let mut first = storage
+        .put_multipart_opts(&path, opts.clone())
+        .await
+        .unwrap();
+    let mut second = storage.put_multipart_opts(&path, opts).await.unwrap();
+    first.put_part("first".into()).await.unwrap();
+    second.put_part("second".into()).await.unwrap();
+    first.complete().await.unwrap();
+    let err = second.complete().await.unwrap_err();
+    assert!(matches!(err, Error::AlreadyExists { .. }), "{err}");
+    // Abort after a failed completion is implementation defined, clean up where possible
+    let _ = second.abort().await;
+
+    let bytes = storage.get(&path).await.unwrap().bytes().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(b"first"));
+    storage.delete(&path).await.unwrap();
 }
 
 /// Tests performing out of order multipart uploads
